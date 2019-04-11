@@ -81,7 +81,7 @@ public class Test {
             // uncomment to test recovery of a dead process while importing
             // die();
 
-            UpdateResult setAsCommittingResult = txns.updateOne(and(eq("_id", txnId), eq(STATUS, Status.STARTED)), combine(set(STATUS, Status.COMMIT.toString()), currentDate(UPDATE)));
+            UpdateResult setAsCommittingResult = txns.updateOne(and(eq("_id", txnId), eq(STATUS, Status.STARTED.toString())), combine(set(STATUS, Status.COMMIT.toString()), currentDate(UPDATE)));
             if (setAsCommittingResult.getModifiedCount() != 1) {
                 // transaction has been marked as not "Started" (presumably rollback) by another process.
                 // to be certain all documents in the tx are deleted, we force it to (re-)rollback
@@ -100,23 +100,23 @@ public class Test {
                     logger.info("Rolling back tx {}", txnId.toString());
                     // mark the transaction as rollback
                     txns.updateOne(and(eq("_id", txnId), ne(STATUS, Status.ROLLBACK.toString())), combine(set(STATUS, Status.ROLLBACK.toString()), currentDate(UPDATE)));
-//                    coll.deleteMany(eq(TXN_ID, txnId));
-
-                    // test error in middle of rollback...
-                    coll.deleteMany(and(eq(TXN_ID, txnId), lt("_id", 500)));
-                    if (backoff == 0) exception();
-                    coll.deleteMany(and(eq(TXN_ID, txnId), lt("_id", 1000))); // resume deletion
-
-                    // test failover
-                    if (backoff == 100) client.getDatabase("admin").runCommand(new Document("replSetStepDown", 60));
-
-                    coll.deleteMany(and(eq(TXN_ID, txnId), lt("_id", 2000))); // resume deletion
-
-                    // test process crash
-                    if (backoff >= 200) die();
-
-                    // the rest is academic because it never reaches here
                     coll.deleteMany(eq(TXN_ID, txnId));
+
+//                    // test error in middle of rollback...
+//                    coll.deleteMany(and(eq(TXN_ID, txnId), lt("_id", 500)));
+//                    if (backoff == 0) exception();
+//                    coll.deleteMany(and(eq(TXN_ID, txnId), lt("_id", 1000))); // resume deletion
+
+//                    // test failover
+//                    if (backoff == 100) client.getDatabase("admin").runCommand(new Document("replSetStepDown", 60));
+//
+//                    coll.deleteMany(and(eq(TXN_ID, txnId), lt("_id", 2000))); // resume deletion
+//
+//                    // test process crash
+//                    if (backoff >= 200) die();
+
+//                    // the rest is academic because it never reaches here
+//                    coll.deleteMany(eq(TXN_ID, txnId));
 
                     txns.updateOne(eq("_id", txnId), combine(set(STATUS, Status.DONE.toString()), currentDate(UPDATE)));
                     retry = false; // exit the backoff/retry loop
@@ -133,7 +133,7 @@ public class Test {
         }
 
         // test error while committing
-        exception();
+//        exception();
 
         coll.updateMany(eq(TXN_ID, txnId), combine(unset(TXN_ID), set(VALID, true)));
         UpdateResult result = txns.updateOne(and(eq("_id", txnId), ne(STATUS, Status.DONE.toString())), combine(set(STATUS, Status.DONE.toString()), currentDate(UPDATE)));
