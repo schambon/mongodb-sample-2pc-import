@@ -56,7 +56,7 @@ public class Recovery implements Runnable {
 
                 // roll back failed transactions
                 txns.find(or(
-                        and(eq("_id", Status.STARTED.toString()), lt(UPDATE, now().minus(2, MINUTES))),
+                        and(eq(STATUS, Status.STARTED.toString()), lt(UPDATE, now().minus(2, MINUTES))),
                         eq(STATUS, Status.ROLLBACK.toString())
                 )).forEach((Consumer<? super Document>) tx -> {
                     ObjectId txnId = tx.getObjectId("_id");
