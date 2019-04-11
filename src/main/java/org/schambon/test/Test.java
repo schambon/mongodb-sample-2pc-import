@@ -59,7 +59,7 @@ public class Test {
             documentsToImport.add(generateDocument(i));
         }
 
-        // break at 5000
+        // uncomment to trigger an exception after 5000
         //documentsToImport.get(5000).append("break", true);
 
         importWithRollback(client, documentsToImport);
@@ -78,7 +78,15 @@ public class Test {
 
         try {
             coll.insertMany(documentsToImport.stream().map(d -> d.append(TXN_ID, txnId).append(VALID, false)).collect(Collectors.toList()));
-            txns.updateOne(eq("_id", txnId), combine(set(STATUS, Status.COMMIT.toString()), currentDate(UPDATE)));
+            // uncomment to test recovery of a dead process while importing
+            // die();
+
+            UpdateResult setAsCommittingResult = txns.updateOne(and(eq("_id", txnId), eq(STATUS, Status.STARTED)), combine(set(STATUS, Status.COMMIT.toString()), currentDate(UPDATE)));
+            if (setAsCommittingResult.getModifiedCount() != 1) {
+                // transaction has been marked as not "Started" (presumably rollback) by another process.
+                // to be certain all documents in the tx are deleted, we force it to (re-)rollback
+                throw new MongoException("Force rollback"); // not very elegant to throw a MongoException
+            }
         } catch (MongoException e1) {
             logger.error("Got an exception while processing transaction - triggering rollback", e1);
 
