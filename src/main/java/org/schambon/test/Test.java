@@ -43,7 +43,7 @@ public class Test {
     public static void main(String[] args) {
 
         MongoClient client = MongoClients.create(MONGODB_URI);
-        MongoDatabase database = client.getDatabase("leshalles");
+        MongoDatabase database = client.getDatabase("mydb");
         MongoCollection<Document> collection = database.getCollection("testimport");
 
         // make sure the collection is empty to start with
@@ -68,7 +68,7 @@ public class Test {
     }
 
     private static void importWithRollback(MongoClient client, List<Document> documentsToImport) {
-        MongoDatabase db = client.getDatabase("leshalles");
+        MongoDatabase db = client.getDatabase("mydb");
         MongoCollection<Document> txns = db.getCollection("txns");
         MongoCollection<Document> coll = db.getCollection("testimport");
 

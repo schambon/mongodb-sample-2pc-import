@@ -35,7 +35,7 @@ public class Recovery implements Runnable {
 
     public static void main(String[] args) {
         MongoClient client = MongoClients.create(MONGODB_URI);
-        MongoDatabase database = client.getDatabase("leshalles");
+        MongoDatabase database = client.getDatabase("mydb");
         MongoCollection<Document> collection = database.getCollection("testimport");
         MongoCollection<Document> txns = database.getCollection("txns");
 
