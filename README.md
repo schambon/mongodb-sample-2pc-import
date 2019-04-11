@@ -2,95 +2,30 @@
 
 Principe :
 
-1  txns.insertOne(new Document("_id", new ObjectId()).append("status", "started").append("lastUpdate", now())
+* on ne fait que des imports, mais on veut qu'ils soient "à peu près atomiques" (s'il y a une erreur lors d'un import, on supprime tout ce qui a été importé)
+* on a une collection pour tracker les transactions
+* les documents importés sont initialement taggés avec l'identifiant de la transaction + statut "non valide" (en cours d'import)
+* quand ils sont tous importés:
+ - on passe la tx à l'état "commit"
+ - on les "committe" en supprimant l'identifiant de la tx + statut "valide"
+ - on finit par passer la tx à l'état "done"
+* en cas d'erreur lors de la phase d'import:
+ - on passe la tx à l'état "rollback"
+ - on supprime les documents trackés par la tx
+ - on finit par passer la tx à l'état "done"
+* en cas d'erreur récupérable (exception...) lors du rollback:
+ - on attend un certain temps (backoff) et on réessaie
+ - on continue comme ça éternellement avec un backoff exponentiel limité à 30s (ou autre valeur arbitraire)
+* en cas d'erreur irrécupérable (crash du process) lors de l'import ou du rollback:
+ - un processus tiers (Recovery) identifie les transactions "en cours" depuis trop longtemps (ici 2 minutes pour les tests, mais plus réaliste : 30 minutes, 1 heure...)
+ - ces transactions sont rollbackées
+* en cas d'erreur irrécupérable lors du commit (transaction à l'état commit):
+ - le processus de recovery vient finaliser le commit
+* en cas d'erreur (récupérable ou non) dans le recovery, l'invocation suivante du recovery devrait corriger le problème.
+  Pour cette raison, il n'y a pas de logique backoff / retry dans le recovery.
 
-   try {
-2     coll.insertMany(allDocumentsToInsert.stream().map(d -> d.append("tx", tx.get("_id"))).collect(toList()))
-3     txns.updateOne(eq("_id", tx.get("_id")), combine(set("status", "finishing"), currentDate("lastUpdate"))
-
-   } catch (MongoException e1) {
-      logger.error(e1)
-
-      long backoff = 0
-      boolean retry = true
-      while (retry) {
-         try {
-            sleep(backoff)
-6           txns.updateOne(and(eq("_id", tx.get("_id")), ne("status", "rollback")), combine(set("status", "rollback"), currentDate("lastUpdate"))
-7           coll.deleteMany(eq("tx", tx.get("_id")))
-8           txns.updateOne(eq("_id", tx.get("_id")), combine(set("status", "done"), currentDate("lastUpdate"))) // or "canceled"?
-            retry = false
-         } catch (MongoException e2) {
-            // log exception but retry anyway
-            logger.error(e2)
-         } finally {
-            backoff = nextBackoff(backoff)
-         }
-      }
-   }
-4  coll.updateMany(eq("tx", tx.get("_id")), combine(unset("tx"), set("valid", true)))
-5  txns.updateOne(eq("_id", tx.get("_id")), combine(set("status", "done"), currentDate("lastUpdate")))
-
-
-   long nextBackoff(previous) {
-      if (previous == 0) {
-         return 100;
-      }
-      return min(previous * 2, 30000) // double the backoff until we reach 30s, then stay there
-   }
-
-Périodiquement (recovery/cleanup thread) :
-
-    // soit on a démarré depuis 30 minutes, soit on est en rollback
-    txns.find(or(and(eq("status", "started"), lt("lastUpdate", now().minus(30, MINUTES)), eq("status", "rollback")).forEach( tx -> {
-1'      txns.updateOne(and(eq("_id", tx.get("_id")), ne("status", "rollback")), combine(set("status", "rollback"), currentDate("lastUpdate"))
-2'      coll.deleteMany(eq("tx", tx.get("_id")))
-3'      txns.updateOne(and(eq("_id", tx.get("_id")), ne("status", "done"), combine(set("status", "done"), currentDate("lastUpdate")))
-    })
-
-    // resume - si on ne veut pas de ça on peut aussi rajouter la clause "finishing" dans le cleanup au-dessus
-    txns.find(eq("status", "finishing")).forEach( tx -> {
-4'      coll.updateMany(eq("tx", tx.get("_id")), combine(unset("tx"), set("valid", true)))
-5'      txns.updateOne(and(eq("_id", tx.get("_id")), ne("status", "done")), combine(set("status", "done"), currentDate("lastUpdate")))
-    })
-
----
-
-
-Exception en:
-
-1 -> abort de l'ensemble de la tx, on n'a rien fait
-
-2 -> on passe dans le catch: abort de la tx
-3 -> on passe dans le catch: abort de la tx
-4 -> on crashe -> ce sera fini par la recovery thread
-5 -> on crashe -> ce sera fini par la recovery thread
-
-6 -> backoff and retry
-7 -> backoff and retry
-8 -> backoff and retry
-
-Crash en:
-
-1 (avant) -> abort de l'ensemble de la tx, on n'a rien fait
-1 (après) -> on a créé une tx mais rien rajouté dedans. Elle sera nettoyée par le cleanup thread
-2 -> on a créé une tx et des entrées dedans, mais on la laisse "dangling" (non finie) -> sera nettoyée par le cleanup thread
-3 -> on a créé une tx et des entrées dedans, mais on la laisse "dangling" (non finie) -> sera nettoyée par le cleanup thread
-     (pas moyen de faire autrement, on ne peut pas savoir si on a fini de faire les insertions)
-4 -> on a traité une tx mais pas fini de la committer -> sera fini par le recovery/resume thread
-5 -> on a traité une tx mais pas fini de la committer -> sera fini par le recovery/resume thread
-6 -> la tx et ses docs seront nettoyés par le cleanup thread
-7 -> la tx et ses docs seront nettoyés par le cleanup thread
-8 -> la tx et ses docs seront nettoyés par le cleanup thread
-
----
-
-Cleanup/recovery thread
-
-Exception ou crash en:
-
-1' -> sera repris à l'invocation suivante du thread
-2' -> la tx est toujours en rollback, le rollback sera terminé à l'invocation suivante du thread
-3' -> la tx est toujours en rollback, le rollback sera terminé à l'invocation suivante du thread
-4' -> la tx est toujours en finalisation, elle sera terminée à l'invocation suivante du thread
-5' -> la tx est toujours en finalisation, elle sera terminée à l'invocation suivante du thread
+Note - le recovery peut fonctionner de manière concurrente avec le rollback. Le seul risque lié au recovery est la
+détection d'une transaction "failed" (en état Started depuis plus de n minutes) -> si la tx n'est pas en erreur mais est
+toujours en train de se terminer, alors le recovery va rentrer en conflit et commencer à la rollbacker alors que ça ne
+devrait pas être le cas. Pour cette raison, si l'objet tx n'est pas en état Started au moment de le passer en Commit,
+alors on rentre dans la logique de rollback.
